@@ -1,0 +1,106 @@
+{{- if .Values.milvus.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milvus-standalone
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.milvus.labels" . | nindent 4 }}
+    app: milvus-standalone
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "competitor-analysis.milvus.selectorLabels" . | nindent 6 }}
+      app: milvus-standalone
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "competitor-analysis.milvus.selectorLabels" . | nindent 8 }}
+        app: milvus-standalone
+    spec:
+      {{- if and .Values.milvus.waitForDependencies.enabled .Values.milvus.etcd.enabled }}
+      initContainers:
+        - name: wait-for-etcd
+          image: {{ .Values.milvus.waitForDependencies.image }}
+          command: ['sh', '-c']
+          args:
+            - |
+              echo "Waiting for etcd service to be available..."
+              TIMEOUT={{ .Values.milvus.waitForDependencies.timeout }}
+              ELAPSED=0
+              until nc -z {{ include "competitor-analysis.etcd.serviceName" . }} {{ .Values.milvus.etcd.service.port }}; do
+                if [ $ELAPSED -ge $TIMEOUT ]; then
+                  echo "ERROR: Timeout waiting for etcd after ${TIMEOUT} seconds"
+                  exit 1
+                fi
+                echo "Waiting for etcd at {{ include "competitor-analysis.etcd.serviceName" . }}:{{ .Values.milvus.etcd.service.port }}... (${ELAPSED}s/${TIMEOUT}s)"
+                sleep 5
+                ELAPSED=$((ELAPSED + 5))
+              done
+              echo "✅ etcd is ready!"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      {{- end }}
+      containers:
+        - name: milvus-standalone
+          image: {{ .Values.milvus.image.repository }}:{{ .Values.milvus.image.tag }}
+          imagePullPolicy: {{ .Values.milvus.image.pullPolicy }}
+          args:
+            - milvus
+            - run
+            - standalone
+          env:
+            - name: DEPLOY_MODE
+              value: {{ .Values.milvus.env.deployMode | quote }}
+            - name: ETCD_ENDPOINTS
+              value: {{ include "competitor-analysis.etcd.endpoint" . }}
+            - name: COMMON_STORAGETYPE
+              value: {{ .Values.milvus.env.storageType | quote }}
+            - name: MILVUS_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-secret
+                  key: root-password
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.milvus.service.grpcPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.milvus.service.httpPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: milvus-data
+              mountPath: /var/lib/milvus
+          {{- if .Values.milvus.livenessProbe }}
+          livenessProbe:
+            exec:
+              command:
+                {{- toYaml .Values.milvus.livenessProbe.exec.command | nindent 16 }}
+            initialDelaySeconds: {{ .Values.milvus.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.milvus.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.milvus.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.milvus.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.milvus.resources }}
+          resources:
+            {{- toYaml .Values.milvus.resources | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: milvus-data
+          persistentVolumeClaim:
+            claimName: milvus-pvc
+      restartPolicy: Always
+{{- end }}
+

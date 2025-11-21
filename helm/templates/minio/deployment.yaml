@@ -1,0 +1,96 @@
+{{- if .Values.minio.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.minio.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "competitor-analysis.minio.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "competitor-analysis.minio.selectorLabels" . | nindent 8 }}
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: minio-pvc
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}
+          imagePullPolicy: {{ .Values.minio.image.pullPolicy }}
+          args:
+            - server
+            - /data
+            - --console-address
+            - :{{ .Values.minio.service.consolePort }}
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pipeline.secretName }}
+                  key: {{ include "competitor-analysis.minio.secretUserKey" . }}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pipeline.secretName }}
+                  key: {{ include "competitor-analysis.minio.secretPasswordKey" . }}
+          ports:
+            - name: api
+              containerPort: {{ .Values.minio.service.apiPort }}
+              protocol: TCP
+            - name: console
+              containerPort: {{ .Values.minio.service.consolePort }}
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              {{- if .Values.minio.storage.subPath }}
+              subPath: {{ .Values.minio.storage.subPath }}
+              {{- end }}
+          {{- if .Values.minio.readinessProbe }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.minio.service.apiPort }}
+            initialDelaySeconds: {{ .Values.minio.readinessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.minio.readinessProbe.timeoutSeconds }}
+            periodSeconds: {{ .Values.minio.readinessProbe.periodSeconds }}
+            successThreshold: {{ .Values.minio.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.minio.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.minio.livenessProbe }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.minio.service.apiPort }}
+            initialDelaySeconds: {{ .Values.minio.livenessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.minio.livenessProbe.timeoutSeconds }}
+            periodSeconds: {{ .Values.minio.livenessProbe.periodSeconds }}
+            successThreshold: {{ .Values.minio.livenessProbe.successThreshold }}
+            failureThreshold: {{ .Values.minio.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.minio.resources }}
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+          {{- end }}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+{{- end }}
+

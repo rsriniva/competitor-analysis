@@ -1,0 +1,94 @@
+# Container for document conversion with Docling + RapidOCR
+# 
+# OCR STRATEGY:
+# - Primary: RapidOCR with PyTorch backend (PP-OCRv4 models)
+#   * Superior accuracy for financial PDFs with tables/charts
+#   * Deep learning-based, auto-selected by docling
+#   * Downloads models at runtime (~40MB): detection, recognition, classification
+# - Fallback: Tesseract (installed but not used by default)
+#   * Available if RapidOCR fails
+#   * Traditional OCR, simpler documents
+FROM python:3.12-slim-bookworm
+
+# Install system dependencies
+# - tesseract-ocr: Backup OCR engine (not used - RapidOCR preferred by docling)
+# - tesseract-ocr-eng: English language data for Tesseract
+# - libgl1: OpenGL library required by OpenCV (used by docling)
+# - libglib2.0-0, libgomp1: Graphics/threading libraries for image processing
+# - curl: For downloading files during build
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install CPU-only PyTorch first (avoids 3.7GB of CUDA dependencies!)
+# PyTorch is required for:
+# 1. Docling's ML models (layout analysis, table detection)
+# 2. RapidOCR's torch backend (PP-OCRv4 models for OCR)
+RUN pip install --no-cache-dir \
+    torch==2.9.0 \
+    torchvision==0.24.0 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# Install other Python packages
+# Note: docling will automatically use RapidOCR with torch backend for OCR
+# llama-stack-client: For embedding generation and Milvus operations via LlamaStack API
+RUN pip install --no-cache-dir \
+    minio==7.2.18 \
+    docling==2.61.2 \
+    pytesseract==0.3.13 \
+    llama-stack-client==0.2.22
+
+# Make /usr/local group-writable for OpenShift compatibility
+# This allows the non-root user (GID 0) to:
+# - Download/cache models, fonts, configs at runtime
+# - Install/setup KFP executor components
+# - Write to /usr/local/bin, /usr/local/lib, /usr/local/share
+RUN chgrp -R 0 /usr/local && \
+    chmod -R g+w /usr/local && \
+    echo "/usr/local is now group-writable for runtime operations"
+
+# Verify installations
+RUN python -c "import minio; print('[OK] minio:', minio.__version__)" && \
+    python -c "import docling; print('[OK] docling: installed')" && \
+    python -c "import pytesseract; print('[OK] pytesseract: installed')" && \
+    python -c "import llama_stack_client; print('[OK] llama-stack-client: installed')" && \
+    tesseract --version
+
+# Set working directory (must be before creating user)
+WORKDIR /app
+
+# Create non-root user for OpenShift compatibility
+# -M: Don't create home directory (we use /app)
+# -g 0: Use group 0 (root group) - required for OpenShift
+# -u 1001: Specific UID for consistency
+RUN useradd -u 1001 -g 0 -M -s /bin/bash appuser && \
+    mkdir -p /app/.cache/huggingface && \
+    chown -R 1001:0 /app && \
+    chmod -R g+rwX /app && \
+    echo "Created user and directories with OpenShift-compatible permissions"
+
+# Set environment variables
+ENV HF_HOME=/app/.cache/huggingface \
+    HOME=/app
+
+# Switch to non-root user
+USER 1001
+
+# Labels for metadata
+LABEL name="kfp-docling-embedding" \
+      version="2.0" \
+      description="KFP component for document conversion (Docling + RapidOCR) and embedding generation (LlamaStack)" \
+      maintainer="rsriniva" \
+      architecture="x86_64" \
+      base-image="python:3.12-slim-bookworm" \
+      ocr-engine="rapidocr-torch" \
+      ocr-model="PP-OCRv4" \
+      embedding-client="llama-stack-client-0.2.22"
+

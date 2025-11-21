@@ -1,0 +1,280 @@
+================================================================================
+  🎉 Competitor Analysis RAG Pipeline - Successfully Installed!
+================================================================================
+
+Chart Version: {{ .Chart.Version }}
+App Version:   {{ .Chart.AppVersion }}
+Namespace:     {{ include "competitor-analysis.namespace" . }}
+Release:       {{ .Release.Name }}
+
+================================================================================
+  📦 Deployed Components
+================================================================================
+
+{{- if .Values.rhoai.enableLlamaStackOperator.enabled }}
+✅ RHOAI Configuration
+   - LlamaStack Operator: Enabled via pre-install hook
+   - DataScienceCluster: {{ .Values.rhoai.enableLlamaStackOperator.dscName }}
+   - Status: Check with 'oc get datasciencecluster'
+{{- end }}
+
+{{- if .Values.minio.enabled }}
+✅ Minio (Object Storage)
+   - Service: {{ include "competitor-analysis.minio.serviceName" . }}
+   - Endpoint: {{ include "competitor-analysis.minio.endpoint" . }}
+   - Console Port: {{ .Values.minio.service.consolePort }}
+{{- end }}
+
+{{- if .Values.milvus.enabled }}
+✅ Milvus (Vector Database)
+   - Service: {{ include "competitor-analysis.milvus.serviceName" . }}
+   - Endpoint: {{ include "competitor-analysis.milvus.endpoint" . }}
+{{- end }}
+
+{{- if .Values.llamastack.enabled }}
+✅ LlamaStack (LLM + Embeddings)
+   - Service: {{ include "competitor-analysis.llamastack.serviceName" . }}
+   - Endpoint: {{ include "competitor-analysis.llamastack.endpoint" . }}
+   - LLM Model: {{ .Values.llamastack.models.llm }}
+   - Embedding Model: {{ .Values.llamastack.models.embedding }}
+{{- end }}
+
+{{- if .Values.dspa.enabled }}
+✅ DSPA (Data Science Pipelines)
+   - Name: {{ .Values.dspa.name }}
+   - MariaDB Database: {{ .Values.dspa.database.mariaDB.pipelineDBName }}
+   - Pipeline Bucket: {{ .Values.dspa.objectStorage.bucket }}
+{{- end }}
+
+✅ Pipeline Definition
+   - Location: helm/competitor-analysis/pipelines/pipeline.yaml
+   - Status: Ready for manual import via RHOAI UI
+
+{{- if .Values.notebook.enabled }}
+✅ Jupyter Workbench
+   - Name: {{ .Values.notebook.name }}
+   {{- if .Values.notebook.gitRepo.enabled }}
+   - GitHub Repo: {{ .Values.notebook.gitRepo.repository }}
+   - Repo Branch: {{ .Values.notebook.gitRepo.revision }}
+   - Mounted at: {{ .Values.notebook.gitRepo.mountPath }}
+   {{- end }}
+   - Storage: {{ .Values.notebook.persistence.size }}
+   - Image: {{ .Values.notebook.image.repository }}:{{ .Values.notebook.image.tag }}
+{{- end }}
+
+{{- if .Values.routes.enabled }}
+✅ Routes (OpenShift)
+   {{- if and .Values.routes.enabled .Values.minio.enabled }}
+   - Minio Console: https://minio-ui-{{ include "competitor-analysis.namespace" . }}.{{ .Values.clusterDomainUrl }}
+   {{- end }}
+   {{- if and .Values.routes.enabled .Values.llamastack.enabled }}
+   - LlamaStack API: https://llama-stack-{{ include "competitor-analysis.namespace" . }}.{{ .Values.clusterDomainUrl }}
+   {{- end }}
+{{- end }}
+
+✅ ConfigMap: {{ .Values.pipeline.configMapName }}
+✅ Secret: {{ .Values.pipeline.secretName }}
+
+================================================================================
+  ✅ What's Already Done (Automated)
+================================================================================
+
+The following have been automatically configured:
+
+{{- if .Values.rhoai.enableLlamaStackOperator.enabled }}
+[OK] LlamaStack Operator enabled (pre-install hook)
+{{- end }}
+{{- if .Values.minio.enabled }}
+[OK] Minio buckets created:
+  - pipelines (by DSPA operator)
+  - intermediate (auto-created by pipeline)
+  - documents (by bucket-creator job)
+{{- end }}
+{{- if .Values.notebook.enabled }}
+  {{- if .Values.notebook.gitRepo.enabled }}
+[OK] Jupyter workbench created with git repo pre-cloned!
+  {{- else }}
+[OK] Jupyter workbench created
+  {{- end }}
+{{- end }}
+{{- if .Values.routes.enabled }}
+[OK] OpenShift Routes exposed for external access
+{{- end }}
+[OK] All pods deployed and running (--wait flag ensures readiness)
+
+================================================================================
+  🚀 What You Need to Do Next
+================================================================================
+
+{{- if .Values.notebook.enabled }}
+
+1. Access your Jupyter workbench:
+   {{- if .Values.routes.enabled }}
+   
+   Open RHOAI Dashboard:
+   https://rhods-dashboard-redhat-ods-applications.{{ .Values.clusterDomainUrl }}
+   {{- else }}
+   
+   - Open RHOAI Dashboard
+   {{- end }}
+   - Navigate to: Data Science Projects → {{ include "competitor-analysis.namespace" . }}
+   - Click: Workbenches → {{ .Values.notebook.name }} → Open
+   
+   {{- if .Values.notebook.gitRepo.enabled }}
+   📓 Your notebooks are ready at: {{ .Values.notebook.gitRepo.mountPath }}
+   {{- end }}
+
+{{- end }}
+
+2. Upload documents to Minio:
+   {{- if .Values.routes.enabled }}
+   
+   Open Minio Console:
+   https://minio-ui-{{ include "competitor-analysis.namespace" . }}.{{ .Values.clusterDomainUrl }}
+   
+   Login with:
+     Username: {{ .Values.minio.credentials.rootUser }}
+     Password: {{ .Values.minio.credentials.rootPassword }}
+   
+   Upload PDFs to: {{ .Values.pipeline.sourceBucket }}/{{ .Values.pipeline.sourcePrefix }}
+   {{- else }}
+   
+   Port-forward Minio:
+   oc port-forward -n {{ include "competitor-analysis.namespace" . }} \
+     svc/{{ include "competitor-analysis.minio.serviceName" . }} \
+     {{ .Values.minio.service.consolePort }}:{{ .Values.minio.service.consolePort }}
+   
+   Open: http://localhost:{{ .Values.minio.service.consolePort }}
+   Login: {{ .Values.minio.credentials.rootUser }} / {{ .Values.minio.credentials.rootPassword }}
+   Upload to: {{ .Values.pipeline.sourceBucket }}/{{ .Values.pipeline.sourcePrefix }}
+   {{- end }}
+
+3. Import the pipeline (one-time setup):
+   
+   a. Open RHOAI Dashboard
+   b. Navigate to: Data Science Pipelines
+   c. Click: "Import pipeline"
+   d. Upload file: helm/competitor-analysis/pipelines/pipeline.yaml
+   e. Pipeline name: document-ingestion-pipeline
+   f. Description: Document ingestion pipeline - PDF to vector embeddings
+   g. Click: "Import pipeline"
+
+4. Run the pipeline to process documents:
+   
+   a. Navigate to: Data Science Pipelines → Runs
+   b. Click: "Create run"
+   c. Select pipeline: document-ingestion-pipeline
+   d. Fill in parameters (use defaults):
+      - run_id: v1
+      - minio_secret_name: {{ .Values.pipeline.secretName }}
+      - pipeline_configmap_name: {{ .Values.pipeline.configMapName }}
+   e. Click: "Create" to start the pipeline
+   
+   Monitor progress in the RHOAI UI Runs page.
+
+5. Query your documents:
+   {{- if .Values.notebook.enabled }}
+   
+   Open the workbench and run the notebooks in {{ .Values.notebook.gitRepo.mountPath }}
+   {{- else }}
+   
+   Upload and run: helm/competitor-analysis/notebooks/competitor-analysis.ipynb
+   {{- end }}
+
+{{- if and .Values.notebook.enabled .Values.notebook.gitRepo.enabled }}
+
+================================================================================
+  🔄 Updating Your Workbench
+================================================================================
+
+To pull latest changes from GitHub into your workbench:
+
+helm upgrade {{ .Release.Name }} . \
+  -n {{ include "competitor-analysis.namespace" . }} \
+  --reuse-values
+
+The git-clone hook will automatically pull latest changes! ✨
+{{- end }}
+
+================================================================================
+  🔧 Optional: Verification Commands
+================================================================================
+
+# Check all pods are running
+oc get pods -n {{ include "competitor-analysis.namespace" . }}
+
+{{- if .Values.dspa.enabled }}
+
+# Verify DSPA is ready
+oc get dspa {{ .Values.dspa.name }} -n {{ include "competitor-analysis.namespace" . }}
+{{- end }}
+
+# Check pipeline imports in RHOAI UI
+# Data Science Pipelines → Pipelines → document-ingestion-pipeline
+
+{{- if .Values.notebook.enabled }}
+
+# Check workbench status
+oc get notebook {{ .Values.notebook.name }} -n {{ include "competitor-analysis.namespace" . }}
+
+{{- if .Values.notebook.gitRepo.enabled }}
+
+# Verify git repo was cloned
+oc exec -n {{ include "competitor-analysis.namespace" . }} \
+  $(oc get pods -n {{ include "competitor-analysis.namespace" . }} \
+    -l notebook-name={{ .Values.notebook.name }} \
+    -o jsonpath='{.items[0].metadata.name}') \
+  -c {{ .Values.notebook.name }} -- \
+  ls -la {{ .Values.notebook.gitRepo.mountPath }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.routes.enabled }}
+
+# List all routes
+oc get routes -n {{ include "competitor-analysis.namespace" . }}
+{{- end }}
+
+================================================================================
+  🔧 Management Commands
+================================================================================
+
+# View deployment status
+helm status {{ .Release.Name }} -n {{ include "competitor-analysis.namespace" . }}
+
+# Upgrade (e.g., after changing values.yaml)
+helm upgrade {{ .Release.Name }} . -n {{ include "competitor-analysis.namespace" . }} --reuse-values
+
+# View logs for troubleshooting
+oc logs -n {{ include "competitor-analysis.namespace" . }} -l app=<component-name> --tail=100
+
+# Uninstall (WARNING: This deletes all data!)
+helm uninstall {{ .Release.Name }} -n {{ include "competitor-analysis.namespace" . }}
+oc delete namespace {{ include "competitor-analysis.namespace" . }}
+
+================================================================================
+  📚 Documentation
+================================================================================
+
+- Chart README: helm/competitor-analysis/README.md
+- Workbench Guide: helm/competitor-analysis/docs/WORKBENCH-CONFIGURATION.md
+- Parameters Reference: helm/competitor-analysis/docs/PARAMETERS-REFERENCE.md
+- Pipeline Documentation: kfp/README.md
+- Query Scripts: scripts/README.md
+- Bucket Management: helm/competitor-analysis/BUCKET-MANAGEMENT.md
+
+================================================================================
+  🐛 Troubleshooting
+================================================================================
+
+If pods are not starting:
+1. Check events: oc describe pod <pod-name> -n {{ include "competitor-analysis.namespace" . }}
+2. Check logs: oc logs <pod-name> -n {{ include "competitor-analysis.namespace" . }}
+3. Verify storage class is available: oc get sc
+
+For support, check the project documentation or contact the AI team.
+
+================================================================================
+Happy RAG building! 🚀
+================================================================================
+

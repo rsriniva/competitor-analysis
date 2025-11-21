@@ -1,0 +1,430 @@
+# ==============================================================================
+# Competitor Analysis RAG Pipeline - Default Values
+# ==============================================================================
+# This file contains all customizable settings for the chart.
+# Override these values using --set or --values flags during helm install.
+#
+# Example:
+#   helm install competitor-analysis . \
+#     --set namespace=my-namespace \
+#     --set minio.credentials.rootUser=admin \
+#     --set clusterDomainUrl=apps.your-cluster.example.com
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Global Settings
+# ------------------------------------------------------------------------------
+# Namespace where all resources will be deployed
+namespace: competitor-analysis
+
+# OpenShift cluster domain URL (required for workbench OAuth integration)
+# Get this from any existing route: oc get route -A | grep apps
+# Example: apps.cluster-abc123.abc123.sandbox123.opentlc.com
+clusterDomainUrl: "apps.cluster.example.com"
+
+# ------------------------------------------------------------------------------
+# Minio Configuration (S3-compatible object storage)
+# ------------------------------------------------------------------------------
+minio:
+  enabled: true
+  image:
+    repository: quay.io/minio/minio
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  # Storage configuration
+  storage:
+    size: 50Gi
+    storageClassName: ""  # Use default storage class if empty
+    subPath: minio       # Subdirectory within PVC for minio data
+  
+  # Minio credentials (username/password)
+  credentials:
+    rootUser: minio
+    rootPassword: minio123
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    apiPort: 9000
+    consolePort: 9090
+  
+  # Resource limits
+  resources:
+    limits:
+      cpu: 250m
+      memory: 1Gi
+    requests:
+      cpu: 20m
+      memory: 100Mi
+  
+  # Note: Buckets are created automatically by the components:
+  # - "pipelines" bucket: Created by DSPA operator
+  # - "intermediate" bucket: Created by helm install
+  # - "documents" bucket: Created by helm install
+  
+  # Health probes
+  readinessProbe:
+    tcpSocket:
+      port: 9000
+    initialDelaySeconds: 5
+    timeoutSeconds: 1
+    periodSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+  
+  livenessProbe:
+    tcpSocket:
+      port: 9000
+    initialDelaySeconds: 30
+    timeoutSeconds: 1
+    periodSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+
+# ------------------------------------------------------------------------------
+# Milvus Configuration (Vector database)
+# ------------------------------------------------------------------------------
+milvus:
+  enabled: true
+  image:
+    repository: milvusdb/milvus
+    tag: v2.6.0
+    pullPolicy: IfNotPresent
+  
+  # Storage configuration
+  storage:
+    size: 20Gi
+    storageClassName: ""  # Use default storage class if empty
+  
+  # Milvus authentication
+  credentials:
+    rootPassword: milvus123
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    grpcPort: 19530      # gRPC port for Milvus
+    httpPort: 9091       # HTTP port for health checks
+  
+  # Init container to wait for etcd dependency
+  waitForDependencies:
+    enabled: true
+    image: busybox:1.36
+    timeout: 300  # seconds to wait before giving up
+  
+  # Etcd dependency configuration (required for Milvus)
+  etcd:
+    enabled: true
+    image:
+      repository: quay.io/coreos/etcd
+      tag: v3.5.5
+      pullPolicy: IfNotPresent
+    env:
+      autoCompactionMode: revision
+      autoCompactionRetention: "1000"
+      quotaBackendBytes: "4294967296"
+      snapshotCount: "50000"
+    service:
+      port: 2379
+  
+  # Milvus environment configuration
+  env:
+    deployMode: standalone
+    storageType: local
+    consistencyLevel: Bounded  # Bounded, Session, Strong, Eventually
+  
+  # Health probe
+  livenessProbe:
+    exec:
+      command: ["curl", "-f", "http://localhost:9091/healthz"]
+    initialDelaySeconds: 90
+    periodSeconds: 30
+    timeoutSeconds: 20
+    failureThreshold: 5
+  
+  # Resource limits (optional, recommended for production)
+  resources: {}
+    # limits:
+    #   cpu: 1000m
+    #   memory: 2Gi
+    # requests:
+    #   cpu: 500m
+    #   memory: 1Gi
+
+# ------------------------------------------------------------------------------
+# LlamaStack Configuration (LLM inference + embeddings)
+# ------------------------------------------------------------------------------
+llamastack:
+  enabled: true
+  
+  # Distribution configuration
+  distribution:
+    name: rh-dev  # LlamaStack distribution name
+  
+  # Model configuration
+  models:
+    llm: granite3.1-8b-instruct
+    embedding: granite-embedding-125m
+  
+  # Init container to wait for Milvus dependency
+  # NOTE: LlamaStackDistribution CRD does not support initContainers
+  # Dependency handling relies on operator retry logic and --wait flag
+  waitForDependencies:
+    enabled: false  # Not supported in LlamaStackDistribution CRD
+    image: busybox:1.36
+    timeout: 300  # seconds to wait before giving up
+  
+  # VLLM inference configuration
+  vllm:
+    inferenceModel: granite-3-3-8b-instruct
+    url: https://granite-3-3-8b-instruct-maas-apicast-production.apps.prod.rhoai.rh-aiservices-bu.com:443/v1
+    tlsVerify: "false"
+    apiToken: ""  # Set via --set or external secret
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8321
+  
+  # Resource limits
+  resources:
+    limits:
+      cpu: 4
+      memory: 12Gi
+    requests:
+      cpu: 250m
+      memory: 500Mi
+  
+  # Environment variables (for VLLM and external integrations)
+  env:
+    vllmMaxTokens: "4096"
+    # Additional env vars can be added here
+    # vllmUrl: ""
+    # vllmTlsVerify: "true"
+
+# ------------------------------------------------------------------------------
+# RHOAI/OpenDataHub Configuration
+# ------------------------------------------------------------------------------
+rhoai:
+  # Enable LlamaStack Operator in DataScienceCluster
+  # This patches the cluster-scoped DataScienceCluster resource
+  enableLlamaStackOperator:
+    enabled: true  # Set to false if you've already enabled it manually
+    dscName: default-dsc  # Name of the DataScienceCluster resource
+    # The patch job runs as a Helm pre-install/pre-upgrade hook
+    # Requires cluster-admin permissions or equivalent RBAC
+
+# ------------------------------------------------------------------------------
+# DSPA Configuration (Data Science Pipelines Application for RHOAI)
+# ------------------------------------------------------------------------------
+dspa:
+  enabled: true
+  name: pipelines-definition  # DSPA resource name
+  
+  # API Server configuration
+  apiServer:
+    # Note: Many legacy fields (stripEOF, terminateStatus, archiveLogs, injectDefaultScript,
+    # trackArtifacts, collectMetrics, autoUpdatePipelineDefaultVersion, dbConfigConMaxLifetimeSec)
+    # are no longer supported in the current DSPA CRD schema
+    resources:
+      requests:
+        cpu: 250m
+        memory: 500Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+  
+  # Database configuration (MariaDB)
+  database:
+    mariaDB:
+      deploy: true
+      pipelineDBName: mlpipeline
+      pvcSize: 10Gi
+      username: mlpipeline
+      # Password is auto-generated by DSPA operator
+      resources:
+        requests:
+          cpu: 300m
+          memory: 800Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+  
+  # Object Storage configuration
+  # Uses the Minio service deployed by this chart
+  objectStorage:
+    bucket: pipelines  # Bucket for KFP pipeline artifacts
+    scheme: http       # http or https
+    # Minio service endpoint is auto-computed from minio service config
+    # Secret references minio-secret created by this chart
+  
+  # Persistence Agent configuration
+  persistenceAgent:
+    deploy: true
+    numWorkers: 2
+    resources:
+      requests:
+        cpu: 120m
+        memory: 500Mi
+      limits:
+        cpu: 250m
+        memory: 1Gi
+  
+  # Scheduled Workflow controller
+  scheduledWorkflow:
+    deploy: true
+    resources:
+      requests:
+        cpu: 120m
+        memory: 100Mi
+      limits:
+        cpu: 250m
+        memory: 250Mi
+
+# ------------------------------------------------------------------------------
+# Pipeline Configuration
+# ------------------------------------------------------------------------------
+pipeline:
+  # Minio bucket configuration
+  sourceBucket: documents             # Input bucket containing source PDF documents
+  destBucket: intermediate            # Bucket containing converted markdown documents
+  markdownPrefix: markdown/           # Prefix/folder path for markdown files within destBucket
+  
+  # Minio connection settings
+  minioEndpoint: minio-service:9000   # Minio server endpoint (service name:port)
+  minioSecure: "false"                # Whether to use HTTPS for Minio ("true" or "false")
+  
+  # Vector DB configuration
+  vectorDbName: competitor-docs       # Logical name for vector database in Milvus
+  chunkSizeInTokens: 512              # Token size for chunking documents during embedding
+  
+  # LlamaStack API configuration
+  # This URL is auto-generated from llamastack service settings
+  # Format: http://<service-name>.<namespace>.svc.cluster.local:<port>
+  # If you need to override, uncomment and set:
+  # llamastackUrl: "http://custom-url:8321"
+  
+  # ConfigMap and Secret names (for KFP pipeline)
+  configMapName: pipeline-config
+  secretName: minio-secret
+  
+  # Pipeline Management
+  # The compiled pipeline is available at: kfp/pipeline.yaml
+  # You need to manually import it via the RHOAI UI:
+  #   1. Open RHOAI Dashboard → Data Science Pipelines
+  #   2. Click "Import pipeline"
+  #   3. Upload: kfp/pipeline.yaml
+  #   4. Name: document-ingestion-pipeline
+  # 
+  # To update the pipeline: run `cd kfp && ./compile-all.sh`
+
+# ------------------------------------------------------------------------------
+# Jupyter Notebook Workbench
+# ------------------------------------------------------------------------------
+# Automatically creates a Jupyter workbench with GitHub repo cloned
+
+notebook:
+  enabled: true  # Set to true to create a workbench
+  name: competitor-analysis-workbench
+  
+  # Notebook image
+  # Using internal OpenShift image registry (pre-pulled by RHOAI)
+  # Available images: s2i-minimal-notebook, jupyter-datascience-cpu-py312-ubi9,
+  #                   jupyter-minimal-cpu-py312-ubi9, jupyter-pytorch-cuda-py312-ubi9
+  image:
+    repository: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-minimal-notebook
+    tag: "2025.2"
+    pullPolicy: IfNotPresent
+  
+  # Resource limits (adjust based on your workload)
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  
+  # GitHub repository to clone into workbench
+  # This will be automatically cloned after the workbench starts
+  gitRepo:
+    enabled: true
+    repository: https://github.com/rsriniva/competitor-analysis-notebooks.git  # Change to your repo
+    revision: main  # Branch, tag, or commit SHA
+    mountPath: /opt/app-root/src/competitor-analysis  # Where to clone the repo
+  
+  # Working directory (where Jupyter starts)
+  workingDir: /opt/app-root/src
+  
+  # Persistent storage for notebook workspace
+  persistence:
+    enabled: true
+    size: 10Gi
+    accessMode: ReadWriteOnce
+    # storageClass: ""  # Use default storage class
+    # existingClaim: ""  # Use existing PVC instead of creating new one
+  
+  # Environment variables
+  env:
+    - name: JUPYTER_ENABLE_LAB
+      value: "yes"
+  
+  # Health checks
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+  
+  # Optional: Service account
+  # serviceAccountName: ""
+  
+  # Optional: Additional volume mounts
+  # additionalVolumeMounts: []
+  
+  # Optional: Additional volumes
+  # additionalVolumes: []
+  
+  # Optional: Node selector
+  # nodeSelector: {}
+  
+  # Optional: Tolerations
+  # tolerations: []
+
+# ------------------------------------------------------------------------------
+# OpenShift Route Configuration (optional)
+# ------------------------------------------------------------------------------
+# If running on OpenShift, you can expose services via Routes
+routes:
+  enabled: true  # Set to false to disable OpenShift Routes
+  
+  llamastack:
+    tls:
+      termination: edge
+      insecureEdgeTerminationPolicy: Redirect
+  
+  minio:
+    api:
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+    console:
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+
+# ------------------------------------------------------------------------------
+# Additional Settings
+# ------------------------------------------------------------------------------
+# Labels to apply to all resources
+commonLabels:
+  app.kubernetes.io/managed-by: Helm
+  app.kubernetes.io/part-of: competitor-analysis
+
+# Annotations to apply to all resources
+commonAnnotations: {}
+

@@ -1,0 +1,34 @@
+apiVersion: v2
+name: competitor-analysis
+description: A Helm chart for Competitor Analysis RAG Pipeline with LlamaStack, Milvus, and Minio
+
+# Chart type - application for deployable services
+type: application
+
+# Chart version (semver)
+version: 0.1.0
+
+# Application version (the version of the deployed application)
+appVersion: "1.0"
+
+# Maintainers
+maintainers:
+  - name: Ravi Srinivasan
+    email: ravis@redhat.com
+
+# Keywords for chart discovery
+keywords:
+  - rag
+  - llm
+  - milvus
+  - vector-database
+  - llamastack
+  - document-ingestion
+  - embeddings
+
+# Home page
+home: https://github.com/rsriniva/competitor-analysis
+
+# Sources
+sources:
+  - https://github.com/rsriniva/competitor-analysis

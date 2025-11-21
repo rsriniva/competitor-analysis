@@ -1,0 +1,54 @@
+{{- if .Values.notebook.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.notebook.name }}
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.notebook.name }}-pod-exec
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/exec"]
+  verbs: ["get", "list", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.notebook.name }}-exec
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.notebook.name }}
+  namespace: {{ include "competitor-analysis.namespace" . }}
+roleRef:
+  kind: Role
+  name: {{ .Values.notebook.name }}-pod-exec
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+

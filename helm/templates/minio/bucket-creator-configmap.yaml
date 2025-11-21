@@ -1,0 +1,137 @@
+{{- if .Values.minio.enabled }}
+---
+# ConfigMap containing the bucket creation script
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "competitor-analysis.fullname" . }}-bucket-creator-script
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.minio.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bucket-init
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  create-buckets.py: |
+    #!/usr/bin/env python3
+    import os
+    import sys
+    from minio import Minio
+    from minio.error import S3Error
+    import time
+    
+    def wait_for_minio(minio_client, max_retries=30):
+        """Wait for MinIO to be ready"""
+        for i in range(max_retries):
+            try:
+                # Try to list buckets to test connection
+                list(minio_client.list_buckets())
+                print("[OK] MinIO is ready")
+                return True
+            except Exception as e:
+                print(f"MinIO not ready yet, waiting... (attempt {i+1}/{max_retries}): {e}")
+                time.sleep(10)
+        return False
+    
+    def ensure_bucket_exists(minio_client, bucket_name):
+        """Create bucket if it doesn't exist"""
+        try:
+            if minio_client.bucket_exists(bucket_name):
+                print(f"[OK] Bucket '{bucket_name}' already exists")
+                return True
+            else:
+                print(f"Creating bucket: {bucket_name}")
+                minio_client.make_bucket(bucket_name)
+                print(f"[OK] Bucket '{bucket_name}' created successfully")
+                return True
+        except S3Error as e:
+            print(f"[FAIL] Error with bucket '{bucket_name}': {e}")
+            return False
+    
+    def main():
+        print("=" * 60)
+        print("Minio Bucket Creator")
+        print("=" * 60)
+        
+        # MinIO configuration from environment
+        minio_endpoint = os.getenv("MINIO_ENDPOINT", "minio-service:9000")
+        minio_access_key = os.getenv("MINIO_ROOT_USER")
+        minio_secret_key = os.getenv("MINIO_ROOT_PASSWORD")
+        
+        # Buckets to create (comma-separated list from env var)
+        buckets_str = os.getenv("BUCKETS_TO_CREATE", "documents")
+        buckets = [b.strip() for b in buckets_str.split(",") if b.strip()]
+        
+        if not minio_access_key or not minio_secret_key:
+            print("[FAIL] MinIO credentials not found")
+            sys.exit(1)
+        
+        print(f"MinIO Endpoint: {minio_endpoint}")
+        print(f"Buckets to create: {buckets}")
+        print()
+        
+        # Initialize MinIO client
+        minio_client = Minio(
+            minio_endpoint,
+            access_key=minio_access_key,
+            secret_key=minio_secret_key,
+            secure=False
+        )
+        
+        # Wait for MinIO to be ready
+        if not wait_for_minio(minio_client):
+            print("[FAIL] MinIO is not ready after waiting")
+            sys.exit(1)
+        
+        # Create each bucket
+        print()
+        print("=" * 60)
+        print("Creating Buckets")
+        print("=" * 60)
+        
+        success_count = 0
+        failed_count = 0
+        
+        for bucket_name in buckets:
+            print(f"\nProcessing bucket: {bucket_name}")
+            if ensure_bucket_exists(minio_client, bucket_name):
+                success_count += 1
+            else:
+                failed_count += 1
+        
+        # Summary
+        print()
+        print("=" * 60)
+        print("Summary")
+        print("=" * 60)
+        print(f"Total buckets requested: {len(buckets)}")
+        print(f"Successfully created/verified: {success_count}")
+        print(f"Failed: {failed_count}")
+        print("=" * 60)
+        
+        # List all buckets for verification
+        print()
+        print("All buckets in MinIO:")
+        try:
+            buckets_list = minio_client.list_buckets()
+            for bucket in buckets_list:
+                print(f"  - {bucket.name} (created: {bucket.creation_date})")
+        except Exception as e:
+            print(f"[FAIL] Could not list buckets: {e}")
+        
+        if failed_count > 0:
+            print(f"\n⚠ {failed_count} buckets failed to create")
+            sys.exit(1)
+        else:
+            print("\n[OK] All buckets processed successfully")
+    
+    if __name__ == "__main__":
+        main()
+  
+  requirements.txt: |
+    minio>=7.2.0
+{{- end }}
+

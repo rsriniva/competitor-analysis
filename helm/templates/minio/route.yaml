@@ -1,0 +1,55 @@
+{{- if and .Values.minio.enabled .Values.routes.enabled }}
+---
+# Minio API Route
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: minio-api
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.minio.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  to:
+    kind: Service
+    name: {{ include "competitor-analysis.minio.serviceName" . }}
+    weight: 100
+  port:
+    targetPort: api
+  wildcardPolicy: None
+  {{- if .Values.routes.minio.api.tls }}
+  tls:
+    termination: {{ .Values.routes.minio.api.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.routes.minio.api.tls.insecureEdgeTerminationPolicy }}
+  {{- end }}
+---
+# Minio Console Route (UI)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: minio-ui
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.minio.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  to:
+    kind: Service
+    name: {{ include "competitor-analysis.minio.serviceName" . }}
+    weight: 100
+  port:
+    targetPort: ui
+  wildcardPolicy: None
+  {{- if .Values.routes.minio.console.tls }}
+  tls:
+    termination: {{ .Values.routes.minio.console.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.routes.minio.console.tls.insecureEdgeTerminationPolicy }}
+  {{- end }}
+{{- end }}
+

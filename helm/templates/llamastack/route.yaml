@@ -1,0 +1,31 @@
+{{- if and .Values.llamastack.enabled .Values.routes.enabled }}
+---
+# LlamaStack External Route
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: llama-stack-ext
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.llamastack.labels" . | nindent 4 }}
+  annotations:
+    openshift.io/host.generated: "true"
+  {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  path: /
+  to:
+    kind: Service
+    name: llama-stack-dist-service
+    weight: 100
+  port:
+    targetPort: http
+  wildcardPolicy: None
+  {{- if .Values.routes.llamastack.tls }}
+  tls:
+    termination: {{ .Values.routes.llamastack.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.routes.llamastack.tls.insecureEdgeTerminationPolicy }}
+  {{- end }}
+{{- end }}
+

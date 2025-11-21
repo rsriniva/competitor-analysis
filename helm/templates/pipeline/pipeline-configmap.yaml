@@ -1,0 +1,58 @@
+{{- if .Values.pipeline }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.pipeline.configMapName }}
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: configuration
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  # ========================================
+  # Minio S3 Storage Configuration
+  # ========================================
+  # Minio server endpoint (internal Kubernetes service)
+  minio_endpoint: {{ .Values.pipeline.minioEndpoint | quote }}
+  
+  # Whether to use HTTPS for Minio connection
+  # Set to "true" for production with TLS, "false" for internal HTTP
+  minio_secure: {{ .Values.pipeline.minioSecure | quote }}
+  
+  # ========================================
+  # Document Storage Buckets
+  # ========================================
+  # Input bucket containing source PDF documents
+  input_docs_bucket: {{ .Values.pipeline.sourceBucket | quote }}
+  
+  # Bucket containing converted markdown documents
+  markdown_docs_bucket: {{ .Values.pipeline.destBucket | quote }}
+  
+  # Prefix/folder path for markdown files within markdown_docs_bucket
+  markdown_docs_prefix: {{ .Values.pipeline.markdownPrefix | quote }}
+  
+  # ========================================
+  # LlamaStack API Configuration
+  # ========================================
+  # LlamaStack API endpoint URL (internal Kubernetes service)
+  # This is used by KFP pipeline Step 2 for embedding generation
+  llamastack_url: {{ include "competitor-analysis.llamastack.endpoint" . | quote }}
+  
+  # ========================================
+  # Vector Database Configuration
+  # ========================================
+  # Vector database identifier - change this to create a new collection
+  # Each vector_db_id represents a separate document collection in Milvus
+  vector_db_id: {{ .Values.pipeline.vectorDbName | quote }}
+  
+  # ========================================
+  # Processing Configuration
+  # ========================================
+  # Token size for chunking documents during embedding generation
+  # Default: 512 tokens per chunk
+  chunk_size_in_tokens: {{ .Values.pipeline.chunkSizeInTokens | quote }}
+{{- end }}
+

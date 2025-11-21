@@ -1,0 +1,71 @@
+{{- if .Values.llamastack.enabled }}
+apiVersion: llamastack.io/v1alpha1
+kind: LlamaStackDistribution
+metadata:
+  name: llama-stack-dist
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.llamastack.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  server:
+    containerSpec:
+      name: llama-stack
+      port: {{ .Values.llamastack.service.port }}
+      {{- if .Values.llamastack.resources }}
+      resources:
+        {{- toYaml .Values.llamastack.resources | nindent 8 }}
+      {{- end }}
+      # Note: initContainers are not supported in LlamaStackDistribution CRD schema
+      # The operator manages the pod directly - dependency on Milvus handled by:
+      # 1. Milvus has initContainer waiting for etcd (works)
+      # 2. LlamaStack deployment will retry connections if Milvus not ready
+      # 3. Use --wait flag during helm install for proper ordering
+      env:
+        # Inference model configuration
+        - name: INFERENCE_MODEL
+          valueFrom:
+            secretKeyRef:
+              name: llama-stack-inference-model-secret
+              key: INFERENCE_MODEL
+        - name: VLLM_MAX_TOKENS
+          value: {{ .Values.llamastack.env.vllmMaxTokens | quote }}
+        - name: VLLM_URL
+          valueFrom:
+            secretKeyRef:
+              name: llama-stack-inference-model-secret
+              key: VLLM_URL
+        - name: VLLM_TLS_VERIFY
+          valueFrom:
+            secretKeyRef:
+              name: llama-stack-inference-model-secret
+              key: VLLM_TLS_VERIFY
+        - name: VLLM_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: llama-stack-inference-model-secret
+              key: VLLM_API_TOKEN
+        # Milvus configuration from secret
+        - name: MILVUS_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: llama-stack-milvus-secret
+              key: MILVUS_ENDPOINT
+        - name: MILVUS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: llama-stack-milvus-secret
+              key: MILVUS_TOKEN
+        - name: MILVUS_CONSISTENCY_LEVEL
+          valueFrom:
+            secretKeyRef:
+              name: llama-stack-milvus-secret
+              key: MILVUS_CONSISTENCY_LEVEL
+    distribution:
+      name: {{ .Values.llamastack.distribution.name }}
+{{- end }}
+

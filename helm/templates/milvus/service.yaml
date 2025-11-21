@@ -1,0 +1,28 @@
+{{- if .Values.milvus.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "competitor-analysis.milvus.serviceName" . }}
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.milvus.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.milvus.service.type }}
+  selector:
+    {{- include "competitor-analysis.milvus.selectorLabels" . | nindent 4 }}
+    app: milvus-standalone
+  ports:
+    - name: grpc
+      port: {{ .Values.milvus.service.grpcPort }}
+      targetPort: {{ .Values.milvus.service.grpcPort }}
+      protocol: TCP
+    - name: http
+      port: {{ .Values.milvus.service.httpPort }}
+      targetPort: {{ .Values.milvus.service.httpPort }}
+      protocol: TCP
+{{- end }}
+

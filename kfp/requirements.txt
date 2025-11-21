@@ -1,0 +1,19 @@
+# KFP Document Ingestion Pipeline - Python Dependencies
+# Python 3.12 required
+
+# Kubeflow Pipelines SDK - for authoring and compiling pipelines
+kfp
+
+# KFP Kubernetes extension - for Kubernetes secret injection
+kfp-kubernetes
+
+# Docling - document conversion to Markdown (PDF, MS Office, etc.)
+docling
+
+# Llamastack Client - embeddings generation and Milvus operations
+# Version pinned to match server version 0.2.22
+llama-stack-client==0.2.22
+
+# Minio - S3 object storage client
+minio
+

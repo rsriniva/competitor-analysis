@@ -1,0 +1,82 @@
+{{- if .Values.notebook.enabled }}
+---
+apiVersion: kubeflow.org/v1
+kind: Notebook
+metadata:
+  name: {{ .Values.notebook.name }}
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook
+    opendatahub.io/dashboard: "true"
+  annotations:
+    notebooks.opendatahub.io/inject-oauth: "true"
+    notebooks.opendatahub.io/last-image-selection: '{{ .Values.notebook.image.repository }}:{{ .Values.notebook.image.tag }}'
+    opendatahub.io/image-display-name: 'Jupyter Data Science | Python 3.11'
+  {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  template:
+    spec:
+      serviceAccountName: {{ .Values.notebook.name }}
+      containers:
+        - name: {{ .Values.notebook.name }}
+          image: {{ .Values.notebook.image.repository }}:{{ .Values.notebook.image.tag }}
+          imagePullPolicy: {{ .Values.notebook.image.pullPolicy }}
+          workingDir: {{ .Values.notebook.workingDir }}
+          
+          {{- if .Values.notebook.resources }}
+          resources:
+            {{- toYaml .Values.notebook.resources | nindent 12 }}
+          {{- end }}
+          
+          volumeMounts:
+            - name: workbench-pvc
+              mountPath: /opt/app-root/src
+          
+          env:
+            - name: NOTEBOOK_ARGS
+              value: |-
+                --ServerApp.port=8888
+                --ServerApp.token=''
+                --ServerApp.password=''
+                --ServerApp.base_url=/notebook/{{ include "competitor-analysis.namespace" . }}/{{ .Values.notebook.name }}
+                --ServerApp.quit_button=False
+                --ServerApp.tornado_settings={"user":"admin","hub_host":"https://rhods-dashboard-redhat-ods-applications.{{ .Values.clusterDomainUrl }}","hub_prefix":"/projects/{{ include "competitor-analysis.namespace" . }}"}
+            - name: JUPYTER_IMAGE
+              value: "{{ .Values.notebook.image.repository }}:{{ .Values.notebook.image.tag }}"
+            # VLLM API credentials from secret
+            - name: VLLM_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: llama-stack-inference-model-secret
+                  key: VLLM_API_TOKEN
+            - name: VLLM_URL
+              valueFrom:
+                secretKeyRef:
+                  name: llama-stack-inference-model-secret
+                  key: VLLM_URL
+            - name: VLLM_TLS_VERIFY
+              valueFrom:
+                secretKeyRef:
+                  name: llama-stack-inference-model-secret
+                  key: VLLM_TLS_VERIFY
+            - name: INFERENCE_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: llama-stack-inference-model-secret
+                  key: INFERENCE_MODEL
+            {{- if .Values.notebook.env }}
+            {{- range .Values.notebook.env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+            {{- end }}
+      
+      volumes:
+        - name: workbench-pvc
+          persistentVolumeClaim:
+            claimName: {{ .Values.notebook.name }}
+{{- end }}
+

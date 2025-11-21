@@ -1,0 +1,30 @@
+{{- if and .Values.notebook.enabled .Values.notebook.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.notebook.name }}
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: {{ .Values.notebook.name }} PVC
+  {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  finalizers:
+    - kubernetes.io/pvc-protection
+spec:
+  accessModes:
+    - {{ .Values.notebook.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.notebook.persistence.size }}
+  {{- if .Values.notebook.persistence.storageClass }}
+  storageClassName: {{ .Values.notebook.persistence.storageClass }}
+  {{- end }}
+  volumeMode: Filesystem
+{{- end }}
+

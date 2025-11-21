@@ -1,0 +1,23 @@
+{{- if and .Values.milvus.enabled .Values.milvus.etcd.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "competitor-analysis.etcd.serviceName" . }}
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.milvus.etcd.service.port }}
+      targetPort: {{ .Values.milvus.etcd.service.port }}
+      protocol: TCP
+  selector:
+    app: etcd
+{{- end }}
+

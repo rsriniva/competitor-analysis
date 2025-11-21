@@ -1,0 +1,24 @@
+{{- if .Values.milvus.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: milvus-pvc
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.milvus.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.milvus.storage.storageClassName }}
+  storageClassName: {{ .Values.milvus.storage.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.milvus.storage.size }}
+  volumeMode: Filesystem
+{{- end }}
+

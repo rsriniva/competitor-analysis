@@ -1,0 +1,23 @@
+{{- if .Values.rhoai.enableLlamaStackOperator.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "competitor-analysis.fullname" . }}-dsc-patcher
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+  annotations:
+    # Helm hook to create this before installation
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  # Permission to get and patch DataScienceCluster resources
+  - apiGroups:
+      - datasciencecluster.opendatahub.io
+    resources:
+      - datascienceclusters
+    verbs:
+      - get
+      - patch
+{{- end }}
+

@@ -1,0 +1,59 @@
+{{- if and .Values.milvus.enabled .Values.milvus.etcd.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-deployment
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+    app: etcd
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "competitor-analysis.labels" . | nindent 8 }}
+        app.kubernetes.io/component: etcd
+        app: etcd
+    spec:
+      containers:
+        - name: etcd
+          image: {{ .Values.milvus.etcd.image.repository }}:{{ .Values.milvus.etcd.image.tag }}
+          imagePullPolicy: {{ .Values.milvus.etcd.image.pullPolicy }}
+          command:
+            - etcd
+            - --advertise-client-urls=http://127.0.0.1:2379
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --data-dir=/etcd
+          ports:
+            - name: client
+              containerPort: {{ .Values.milvus.etcd.service.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: etcd-data
+              mountPath: /etcd
+          env:
+            - name: ETCD_AUTO_COMPACTION_MODE
+              value: {{ .Values.milvus.etcd.env.autoCompactionMode | quote }}
+            - name: ETCD_AUTO_COMPACTION_RETENTION
+              value: {{ .Values.milvus.etcd.env.autoCompactionRetention | quote }}
+            - name: ETCD_QUOTA_BACKEND_BYTES
+              value: {{ .Values.milvus.etcd.env.quotaBackendBytes | quote }}
+            - name: ETCD_SNAPSHOT_COUNT
+              value: {{ .Values.milvus.etcd.env.snapshotCount | quote }}
+      volumes:
+        - name: etcd-data
+          emptyDir: {}
+      restartPolicy: Always
+{{- end }}
+

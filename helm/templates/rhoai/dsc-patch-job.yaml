@@ -1,0 +1,110 @@
+{{- if .Values.rhoai.enableLlamaStackOperator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "competitor-analysis.fullname" . }}-enable-llamastack-{{ .Release.Revision }}
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dsc-patcher
+  annotations:
+    # Helm hook: runs before installing/upgrading any other resources
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 300  # Clean up job after 5 minutes
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "competitor-analysis.labels" . | nindent 8 }}
+        app.kubernetes.io/component: dsc-patcher
+    spec:
+      serviceAccountName: {{ include "competitor-analysis.fullname" . }}-dsc-patcher
+      restartPolicy: OnFailure
+      containers:
+        - name: patch-datasciencecluster
+          image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "=================================================="
+              echo "Enabling LlamaStack Operator in DataScienceCluster"
+              echo "=================================================="
+              echo ""
+              
+              DSC_NAME="{{ .Values.rhoai.enableLlamaStackOperator.dscName }}"
+              
+              # Check if DataScienceCluster exists
+              if ! oc get datasciencecluster "${DSC_NAME}" &>/dev/null; then
+                echo "ERROR: DataScienceCluster '${DSC_NAME}' not found"
+                echo ""
+                echo "Available DataScienceClusters:"
+                oc get datasciencecluster -o name || echo "  (none found)"
+                echo ""
+                echo "Please ensure RHOAI/OpenDataHub is installed and the DataScienceCluster exists."
+                exit 1
+              fi
+              
+              echo "Found DataScienceCluster: ${DSC_NAME}"
+              echo ""
+              
+              # Check current state
+              echo "Current LlamaStack operator state:"
+              CURRENT_STATE=$(oc get datasciencecluster "${DSC_NAME}" \
+                -o jsonpath='{.spec.components.llamastackoperator.managementState}' 2>/dev/null || echo "not set")
+              echo "  managementState: ${CURRENT_STATE}"
+              echo ""
+              
+              if [ "${CURRENT_STATE}" = "Managed" ]; then
+                echo "[OK] LlamaStack operator is already enabled (Managed)"
+                echo "   No action needed."
+                exit 0
+              fi
+              
+              # Patch the DataScienceCluster
+              echo "Patching DataScienceCluster to enable LlamaStack operator..."
+              oc patch datasciencecluster "${DSC_NAME}" \
+                --type=merge \
+                -p '{"spec":{"components":{"llamastackoperator": {"managementState": "Managed"}}}}'
+              
+              if [ $? -eq 0 ]; then
+                echo ""
+                echo "[OK] Successfully enabled LlamaStack operator"
+                echo ""
+                echo "Verifying patch..."
+                NEW_STATE=$(oc get datasciencecluster "${DSC_NAME}" \
+                  -o jsonpath='{.spec.components.llamastackoperator.managementState}')
+                echo "  New managementState: ${NEW_STATE}"
+                
+                if [ "${NEW_STATE}" = "Managed" ]; then
+                  echo ""
+                  echo "[OK] Patch verified successfully"
+                  echo ""
+                  echo "The LlamaStack operator will now be deployed by RHOAI."
+                  echo "LlamaStackDistribution resources can now be created."
+                  exit 0
+                else
+                  echo ""
+                  echo "[WARN]  WARNING: Patch applied but verification failed"
+                  echo "   Expected: Managed"
+                  echo "   Got: ${NEW_STATE}"
+                  exit 1
+                fi
+              else
+                echo ""
+                echo "[FAIL] Failed to patch DataScienceCluster"
+                exit 1
+              fi
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+{{- end }}
+

@@ -1,0 +1,63 @@
+{{- if .Values.dspa.enabled }}
+apiVersion: datasciencepipelinesapplications.opendatahub.io/v1
+kind: DataSciencePipelinesApplication
+metadata:
+  name: {{ .Values.dspa.name }}
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dspa
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  apiServer:
+    deploy: true
+    {{- if .Values.dspa.apiServer.resources }}
+    resources:
+      {{- toYaml .Values.dspa.apiServer.resources | nindent 6 }}
+    {{- end }}
+  
+  # Database configuration using MariaDB
+  database:
+    mariaDB:
+      deploy: {{ .Values.dspa.database.mariaDB.deploy }}
+      pipelineDBName: {{ .Values.dspa.database.mariaDB.pipelineDBName }}
+      pvcSize: {{ .Values.dspa.database.mariaDB.pvcSize }}
+      username: {{ .Values.dspa.database.mariaDB.username }}
+      {{- if .Values.dspa.database.mariaDB.resources }}
+      resources:
+        {{- toYaml .Values.dspa.database.mariaDB.resources | nindent 8 }}
+      {{- end }}
+  
+  # Object storage - using EXISTING Minio service
+  objectStorage:
+    externalStorage:
+      host: {{ include "competitor-analysis.minio.serviceName" . }}.{{ include "competitor-analysis.namespace" . }}.svc.cluster.local
+      port: {{ .Values.minio.service.apiPort | quote }}
+      bucket: {{ .Values.dspa.objectStorage.bucket | quote }}
+      scheme: {{ .Values.dspa.objectStorage.scheme }}
+      s3CredentialsSecret:
+        accessKey: {{ include "competitor-analysis.minio.secretUserKey" . }}
+        secretKey: {{ include "competitor-analysis.minio.secretPasswordKey" . }}
+        secretName: {{ .Values.pipeline.secretName }}
+  
+  # Persistence Agent
+  persistenceAgent:
+    deploy: {{ .Values.dspa.persistenceAgent.deploy }}
+    numWorkers: {{ .Values.dspa.persistenceAgent.numWorkers }}
+    {{- if .Values.dspa.persistenceAgent.resources }}
+    resources:
+      {{- toYaml .Values.dspa.persistenceAgent.resources | nindent 6 }}
+    {{- end }}
+  
+  # Scheduled Workflow controller
+  scheduledWorkflow:
+    deploy: {{ .Values.dspa.scheduledWorkflow.deploy }}
+    {{- if .Values.dspa.scheduledWorkflow.resources }}
+    resources:
+      {{- toYaml .Values.dspa.scheduledWorkflow.resources | nindent 6 }}
+    {{- end }}
+{{- end }}
+

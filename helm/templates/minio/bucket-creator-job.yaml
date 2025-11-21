@@ -1,0 +1,83 @@
+{{- if .Values.minio.enabled }}
+---
+# Job to create buckets in Minio using Python SDK
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "competitor-analysis.fullname" . }}-bucket-creator
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.minio.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bucket-init
+  annotations:
+    # Run after installation/upgrade is complete
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ttlSecondsAfterFinished: 300  # Clean up after 5 minutes
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "competitor-analysis.minio.labels" . | nindent 8 }}
+        app.kubernetes.io/component: bucket-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bucket-creator
+          image: python:3.11-slim
+          command: ["/bin/bash"]
+          args:
+            - -c
+            - |
+              set -e
+              echo "=== Starting Minio Bucket Creator ==="
+              
+              # Create a directory for packages inside the writable /tmp folder
+              PACKAGES_DIR=/tmp/packages
+              mkdir -p $PACKAGES_DIR
+              
+              echo "Installing dependencies to $PACKAGES_DIR..."
+              pip install --no-cache-dir --target=$PACKAGES_DIR -r /scripts/requirements.txt
+              
+              echo "Starting bucket creation..."
+              # Add the packages directory to Python's path and run the script
+              PYTHONPATH=$PACKAGES_DIR python /scripts/create-buckets.py
+              
+              echo "=== Bucket creation job completed successfully ==="
+          env:
+            - name: MINIO_ENDPOINT
+              value: "{{ include "competitor-analysis.minio.serviceName" . }}:{{ .Values.minio.service.apiPort }}"
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pipeline.secretName }}
+                  key: {{ include "competitor-analysis.minio.secretUserKey" . }}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pipeline.secretName }}
+                  key: {{ include "competitor-analysis.minio.secretPasswordKey" . }}
+            - name: BUCKETS_TO_CREATE
+              value: "{{ .Values.pipeline.sourceBucket }},{{ .Values.pipeline.destBucket }}"
+          volumeMounts:
+            - name: creator-script
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "200m"
+              memory: "512Mi"
+      volumes:
+        - name: creator-script
+          configMap:
+            name: {{ include "competitor-analysis.fullname" . }}-bucket-creator-script
+{{- end }}
+

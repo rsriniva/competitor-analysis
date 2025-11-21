@@ -1,0 +1,156 @@
+{{- if and .Values.notebook.enabled .Values.notebook.gitRepo.enabled }}
+---
+# Job to clone git repository into workbench after it's running
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.notebook.name }}-clone-repo
+  namespace: {{ include "competitor-analysis.namespace" . }}
+  labels:
+    {{- include "competitor-analysis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notebook-git-clone
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "15"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "competitor-analysis.labels" . | nindent 8 }}
+        app.kubernetes.io/component: notebook-git-clone
+    spec:
+      serviceAccountName: {{ .Values.notebook.name }}
+      restartPolicy: Never
+      
+      initContainers:
+        - name: wait-for-workbench
+          image: image-registry.openshift-image-registry.svc:5000/openshift/tools:latest
+          command: ["/bin/bash"]
+          args:
+            - -ec
+            - |
+              echo "Waiting for workbench pod to be running..."
+              MAX_ATTEMPTS=60
+              ATTEMPT=0
+              
+              while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+                POD_STATUS=$(oc get pods -n {{ include "competitor-analysis.namespace" . }} \
+                  -l notebook-name={{ .Values.notebook.name }} \
+                  -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
+                
+                if [ "$POD_STATUS" = "Running" ]; then
+                  echo "[OK] Workbench pod is running"
+                  
+                  # Also check if pod is ready
+                  POD_READY=$(oc get pods -n {{ include "competitor-analysis.namespace" . }} \
+                    -l notebook-name={{ .Values.notebook.name }} \
+                    -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+                  
+                  if [ "$POD_READY" = "True" ]; then
+                    echo "[OK] Workbench pod is ready"
+                    exit 0
+                  fi
+                fi
+                
+                ATTEMPT=$((ATTEMPT + 1))
+                echo "Waiting for workbench... attempt ${ATTEMPT}/${MAX_ATTEMPTS} (status: ${POD_STATUS})"
+                sleep 5
+              done
+              
+              echo "[FAIL] Workbench pod did not become ready after ${MAX_ATTEMPTS} attempts"
+              exit 1
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      
+      containers:
+        - name: git-clone
+          image: image-registry.openshift-image-registry.svc:5000/openshift/tools:latest
+          command: ["/bin/bash"]
+          args:
+            - -ec
+            - |
+              echo "=================================================="
+              echo "Cloning Git Repository into Workbench"
+              echo "=================================================="
+              
+              # Get the workbench pod name
+              POD_NAME=$(oc get pods -n {{ include "competitor-analysis.namespace" . }} \
+                -l notebook-name={{ .Values.notebook.name }} \
+                -o jsonpath='{.items[0].metadata.name}')
+              
+              if [ -z "$POD_NAME" ]; then
+                echo "[FAIL] Could not find workbench pod"
+                exit 1
+              fi
+              
+              echo "Workbench pod: $POD_NAME"
+              echo ""
+              
+              # Check if repo already exists and is a valid git repository
+              echo "Checking if repository already exists..."
+              REPO_EXISTS=$(oc exec -n {{ include "competitor-analysis.namespace" . }} $POD_NAME -- \
+                bash -c "test -d {{ .Values.notebook.gitRepo.mountPath }}/.git && echo 'yes' || echo 'no'") || echo 'no'
+              
+              if [ "$REPO_EXISTS" = "yes" ]; then
+                echo "[OK] Valid git repository found at {{ .Values.notebook.gitRepo.mountPath }}"
+                echo "Updating existing repository..."
+                oc exec -n {{ include "competitor-analysis.namespace" . }} $POD_NAME -- \
+                  bash -c "cd {{ .Values.notebook.gitRepo.mountPath }} && git fetch origin && git reset --hard origin/{{ .Values.notebook.gitRepo.revision }}"
+                echo "[OK] Repository updated"
+              else
+                # Check if directory exists but is not a git repo
+                DIR_EXISTS=$(oc exec -n {{ include "competitor-analysis.namespace" . }} $POD_NAME -- \
+                  bash -c "test -d {{ .Values.notebook.gitRepo.mountPath }} && echo 'yes' || echo 'no'") || echo 'no'
+                
+                if [ "$DIR_EXISTS" = "yes" ]; then
+                  echo "⚠ Directory {{ .Values.notebook.gitRepo.mountPath }} exists but is not a git repository"
+                  echo "Removing existing directory and cloning fresh..."
+                  oc exec -n {{ include "competitor-analysis.namespace" . }} $POD_NAME -- \
+                    bash -c "rm -rf {{ .Values.notebook.gitRepo.mountPath }}"
+                fi
+                
+                echo "Cloning repository..."
+                echo "  URL: {{ .Values.notebook.gitRepo.repository }}"
+                echo "  Branch/Tag: {{ .Values.notebook.gitRepo.revision }}"
+                echo "  Target: {{ .Values.notebook.gitRepo.mountPath }}"
+                echo ""
+                
+                # Extract the directory name from mountPath
+                REPO_DIR=$(basename {{ .Values.notebook.gitRepo.mountPath }})
+                
+                oc exec -n {{ include "competitor-analysis.namespace" . }} $POD_NAME -- \
+                  bash -c "cd /opt/app-root/src && git clone --branch {{ .Values.notebook.gitRepo.revision }} {{ .Values.notebook.gitRepo.repository }} $REPO_DIR"
+                
+                echo "[OK] Repository cloned successfully"
+              fi
+              
+              # List contents
+              echo ""
+              echo "Repository contents:"
+              oc exec -n {{ include "competitor-analysis.namespace" . }} $POD_NAME -- \
+                bash -c "ls -la {{ .Values.notebook.gitRepo.mountPath }}" || true
+              
+              echo ""
+              echo "=================================================="
+              echo "[OK] Git clone job completed successfully"
+              echo "=================================================="
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+{{- end }}
+

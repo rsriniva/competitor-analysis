@@ -1,0 +1,378 @@
+# PIPELINE DEFINITION
+# Name: document-ingestion-pipeline
+# Description: Unified pipeline: PDF -> Markdown -> Embeddings -> Milvus (stateless, Minio-coordinated)
+# Inputs:
+#    minio_secret_name: str [Default: 'minio-secret']
+#    pipeline_configmap_name: str [Default: 'pipeline-config']
+#    run_id: str [Default: 'v1']
+components:
+  comp-convert-pdfs-to-markdown:
+    executorLabel: exec-convert-pdfs-to-markdown
+    inputDefinitions:
+      parameters:
+        run_id:
+          defaultValue: v1
+          description: Version identifier for cache busting
+          isOptional: true
+          parameterType: STRING
+  comp-generate-embeddings-and-store:
+    executorLabel: exec-generate-embeddings-and-store
+    inputDefinitions:
+      parameters:
+        run_id:
+          defaultValue: v1
+          description: Version identifier for cache busting
+          isOptional: true
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-convert-pdfs-to-markdown:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - convert_pdfs_to_markdown
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.6'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef convert_pdfs_to_markdown(\n    run_id: str = \"v1\"\n):\n   \
+          \ \"\"\"\n    Download all PDFs from Minio, convert to Markdown, upload\
+          \ to intermediate bucket.\n    All configuration comes from environment\
+          \ variables (ConfigMap/Secrets).\n\n    Args:\n        run_id: Version identifier\
+          \ for cache busting\n    \"\"\"\n    import os\n    import sys\n    from\
+          \ minio import Minio\n    from minio.error import S3Error\n    from docling.document_converter\
+          \ import DocumentConverter\n\n    print(\"=\" * 70)\n    print(\"COMPONENT\
+          \ 1: PDF TO MARKDOWN CONVERSION\")\n    print(\"=\" * 70)\n    print(f\"\
+          Run ID: {run_id}\")\n\n    # Get all configuration from environment variables\
+          \ (injected from ConfigMap/Secret)\n    minio_endpoint = os.environ.get('MINIO_ENDPOINT')\n\
+          \    minio_access_key = os.environ.get('MINIO_ACCESS_KEY')\n    minio_secret_key\
+          \ = os.environ.get('MINIO_SECRET_KEY')\n    minio_secure = os.environ.get('MINIO_SECURE',\
+          \ 'false').lower() in ('true', '1', 'yes')\n\n    input_bucket = os.environ.get('INPUT_DOCS_BUCKET')\n\
+          \    output_bucket = os.environ.get('MARKDOWN_DOCS_BUCKET')\n    output_prefix\
+          \ = os.environ.get('MARKDOWN_DOCS_PREFIX', 'markdown/')\n\n    print(f\"\
+          \\nConfiguration:\")\n    print(f\"  Minio: {minio_endpoint} (secure={minio_secure})\"\
+          )\n    print(f\"  Input bucket: {input_bucket}\")\n    print(f\"  Output\
+          \ bucket: {output_bucket}\")\n    print(f\"  Output prefix: {output_prefix}\"\
+          )\n\n    pdf_dir = \"/tmp/pdfs\"\n    markdown_dir = \"/tmp/markdown\"\n\
+          \    os.makedirs(pdf_dir, exist_ok=True)\n    os.makedirs(markdown_dir,\
+          \ exist_ok=True)\n\n    try:\n        # Connect to Minio\n        client\
+          \ = Minio(\n            minio_endpoint,\n            access_key=minio_access_key,\n\
+          \            secret_key=minio_secret_key,\n            secure=minio_secure\n\
+          \        )\n        print(f\"\\n[OK] Connected to Minio\")\n\n        #\
+          \ Check buckets\n        if not client.bucket_exists(input_bucket):\n  \
+          \          raise ValueError(f\"Input bucket '{input_bucket}' does not exist!\"\
+          )\n\n        if not client.bucket_exists(output_bucket):\n            print(f\"\
+          [INFO] Creating output bucket '{output_bucket}'\")\n            client.make_bucket(output_bucket)\n\
+          \n        print(f\"[OK] Buckets verified\")\n\n        # Step 1: List and\
+          \ download all PDFs\n        print(f\"\\n{'=' * 70}\")\n        print(\"\
+          STEP 1: DOWNLOAD PDFs\")\n        print(\"=\" * 70)\n\n        objects =\
+          \ client.list_objects(input_bucket, recursive=True)\n        pdf_files =\
+          \ []\n\n        for obj in objects:\n            if not obj.object_name.lower().endswith('.pdf'):\n\
+          \                continue\n\n            file_name = os.path.basename(obj.object_name)\n\
+          \            local_path = os.path.join(pdf_dir, file_name)\n\n         \
+          \   print(f\"\\nDownloading: {obj.object_name}\")\n            print(f\"\
+          \  Size: {obj.size} bytes\")\n\n            client.fget_object(input_bucket,\
+          \ obj.object_name, local_path)\n            pdf_files.append(local_path)\n\
+          \            print(f\"  [OK] Downloaded\")\n\n        if len(pdf_files)\
+          \ == 0:\n            print(\"\\n[WARNING] No PDF files found!\")\n     \
+          \       return\n\n        print(f\"\\n[OK] Downloaded {len(pdf_files)} PDF\
+          \ files\")\n\n        # Step 2: Convert PDFs to Markdown\n        print(f\"\
+          \\n{'=' * 70}\")\n        print(\"STEP 2: CONVERT TO MARKDOWN\")\n     \
+          \   print(\"=\" * 70)\n\n        converter = DocumentConverter()\n     \
+          \   successful = 0\n        failed = 0\n\n        for pdf_path in pdf_files:\n\
+          \            pdf_name = os.path.basename(pdf_path)\n            markdown_name\
+          \ = os.path.splitext(pdf_name)[0] + \".md\"\n            markdown_path =\
+          \ os.path.join(markdown_dir, markdown_name)\n\n            print(f\"\\nConverting:\
+          \ {pdf_name}\")\n            try:\n                result = converter.convert(pdf_path)\n\
+          \                markdown_content = result.document.export_to_markdown()\n\
+          \n                with open(markdown_path, 'w', encoding='utf-8') as f:\n\
+          \                    f.write(markdown_content)\n\n                size =\
+          \ os.path.getsize(markdown_path)\n                print(f\"  [OK] Converted\
+          \ ({size} bytes)\")\n                successful += 1\n\n            except\
+          \ Exception as e:\n                print(f\"  [ERROR] {str(e)}\", file=sys.stderr)\n\
+          \                failed += 1\n                continue\n\n        print(f\"\
+          \\n[OK] Converted {successful}/{len(pdf_files)} documents\")\n        if\
+          \ failed > 0:\n            print(f\"[WARNING] Failed: {failed}\", file=sys.stderr)\n\
+          \n        # Step 3: Upload Markdown files to Minio\n        print(f\"\\\
+          n{'=' * 70}\")\n        print(\"STEP 3: UPLOAD TO MINIO\")\n        print(\"\
+          =\" * 70)\n\n        uploaded = 0\n        for md_file in os.listdir(markdown_dir):\n\
+          \            if not md_file.endswith('.md'):\n                continue\n\
+          \n            local_path = os.path.join(markdown_dir, md_file)\n       \
+          \     object_name = f\"{output_prefix}{md_file}\"\n\n            print(f\"\
+          \\nUploading: {md_file}\")\n            try:\n                client.fput_object(\n\
+          \                    output_bucket,\n                    object_name,\n\
+          \                    local_path,\n                    content_type='text/markdown'\n\
+          \                )\n                print(f\"  [OK] Uploaded to {object_name}\"\
+          )\n                uploaded += 1\n            except S3Error as e:\n   \
+          \             print(f\"  [ERROR] {str(e)}\", file=sys.stderr)\n        \
+          \        continue\n\n        print(f\"\\n{'=' * 70}\")\n        print(\"\
+          SUMMARY\")\n        print(\"=\" * 70)\n        print(f\"PDFs processed:\
+          \ {len(pdf_files)}\")\n        print(f\"Successfully converted: {successful}\"\
+          )\n        print(f\"Failed conversions: {failed}\")\n        print(f\"Uploaded\
+          \ to Minio: {uploaded}\")\n        print(f\"Location: {output_bucket}/{output_prefix}\"\
+          )\n        print(\"=\" * 70)\n\n    except Exception as e:\n        print(f\"\
+          \\n[FATAL ERROR] {str(e)}\", file=sys.stderr)\n        import traceback\n\
+          \        traceback.print_exc(file=sys.stderr)\n        raise\n\n"
+        image: quay.io/rsriniva/kfp-docling:latest
+    exec-generate-embeddings-and-store:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - generate_embeddings_and_store
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.6'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef generate_embeddings_and_store(\n    run_id: str = \"v1\"\n):\n\
+          \    \"\"\"\n    Download all Markdown files from Minio, generate embeddings,\
+          \ store in Milvus.\n    All configuration comes from environment variables\
+          \ (ConfigMap/Secrets).\n\n    Args:\n        run_id: Version identifier\
+          \ for cache busting\n    \"\"\"\n    import os\n    import sys\n    from\
+          \ minio import Minio\n    from llama_stack_client import LlamaStackClient\n\
+          \    from llama_stack_client.types import Document\n\n    print(\"=\" *\
+          \ 70)\n    print(\"COMPONENT 2: GENERATE EMBEDDINGS AND STORE IN MILVUS\"\
+          )\n    print(\"=\" * 70)\n    print(f\"Run ID: {run_id}\")\n\n    # Get\
+          \ all configuration from environment variables (injected from ConfigMap/Secret)\n\
+          \    minio_endpoint = os.environ.get('MINIO_ENDPOINT')\n    minio_access_key\
+          \ = os.environ.get('MINIO_ACCESS_KEY')\n    minio_secret_key = os.environ.get('MINIO_SECRET_KEY')\n\
+          \    minio_secure = os.environ.get('MINIO_SECURE', 'false').lower() in ('true',\
+          \ '1', 'yes')\n\n    markdown_bucket = os.environ.get('MARKDOWN_DOCS_BUCKET')\n\
+          \    markdown_prefix = os.environ.get('MARKDOWN_DOCS_PREFIX', 'markdown/')\n\
+          \n    llamastack_url = os.environ.get('LLAMASTACK_URL')\n    vector_db_id\
+          \ = os.environ.get('VECTOR_DB_ID')\n    chunk_size = int(os.environ.get('CHUNK_SIZE_IN_TOKENS',\
+          \ '512'))\n\n    print(f\"\\nConfiguration:\")\n    print(f\"  Minio: {minio_endpoint}\"\
+          )\n    print(f\"  Markdown bucket: {markdown_bucket}\")\n    print(f\" \
+          \ Markdown prefix: {markdown_prefix}\")\n    print(f\"  LlamaStack: {llamastack_url}\"\
+          )\n    print(f\"  Vector DB: {vector_db_id}\")\n    print(f\"  Chunk size:\
+          \ {chunk_size} tokens\")\n\n    markdown_dir = \"/tmp/markdown\"\n    os.makedirs(markdown_dir,\
+          \ exist_ok=True)\n\n    try:\n        # Step 1: Connect to services\n  \
+          \      print(f\"\\n{'=' * 70}\")\n        print(\"STEP 1: CONNECT TO SERVICES\"\
+          )\n        print(\"=\" * 70)\n\n        minio_client = Minio(\n        \
+          \    minio_endpoint,\n            access_key=minio_access_key,\n       \
+          \     secret_key=minio_secret_key,\n            secure=minio_secure\n  \
+          \      )\n        print(f\"[OK] Connected to Minio\")\n\n        llama_client\
+          \ = LlamaStackClient(base_url=llamastack_url)\n        print(f\"[OK] Connected\
+          \ to LlamaStack\")\n\n        # Get embedding model from LlamaStack\n  \
+          \      print(f\"\\n[INFO] Fetching available models...\")\n        models\
+          \ = llama_client.models.list()\n        print(f\"[OK] Found {len(models)}\
+          \ models\")\n\n        embedding_model = None\n        for model in models:\n\
+          \            if model.model_type == \"embedding\":\n                embedding_model\
+          \ = model\n                break\n\n        if embedding_model is None:\n\
+          \            raise ValueError(\"No embedding model found in LlamaStack!\"\
+          )\n\n        embedding_model_id = embedding_model.identifier\n        embedding_dimension\
+          \ = embedding_model.metadata.get(\"embedding_dimension\", 768)\n       \
+          \ print(f\"[OK] Embedding model: {embedding_model_id} (dimension: {embedding_dimension})\"\
+          )\n\n        # Step 2: Register/find vector database\n        print(f\"\\\
+          n{'=' * 70}\")\n        print(\"STEP 2: SETUP VECTOR DATABASE\")\n     \
+          \   print(\"=\" * 70)\n\n        actual_vector_db_id = None\n\n        try:\n\
+          \            # Check if vector DB already exists\n            existing_dbs\
+          \ = llama_client.vector_dbs.list()\n            for db in existing_dbs:\n\
+          \                if db.identifier == vector_db_id or getattr(db, 'vector_db_name',\
+          \ None) == vector_db_id:\n                    actual_vector_db_id = db.identifier\n\
+          \                    print(f\"[OK] Found existing vector DB: {vector_db_id}\"\
+          )\n                    print(f\"    Using identifier: {actual_vector_db_id}\"\
+          )\n                    break\n\n            if not actual_vector_db_id:\n\
+          \                # Register new vector DB\n                print(f\"[INFO]\
+          \ Registering new vector DB: {vector_db_id}\")\n\n                vector_db\
+          \ = llama_client.vector_dbs.register(\n                    vector_db_id=vector_db_id,\n\
+          \                    embedding_model=embedding_model_id,\n             \
+          \       embedding_dimension=embedding_dimension,\n                    provider_id=\"\
+          milvus-remote\"\n                )\n                actual_vector_db_id\
+          \ = vector_db.identifier\n                print(f\"[OK] Registered vector\
+          \ DB: {actual_vector_db_id}\")\n\n        except Exception as e:\n     \
+          \       print(f\"[ERROR] Vector DB setup failed: {str(e)}\", file=sys.stderr)\n\
+          \            raise\n\n        print(f\"\\n[OK] Vector DB ready: {actual_vector_db_id}\"\
+          )\n        print(f\"    Embedding model: {embedding_model_id}\")\n     \
+          \   print(f\"    Dimensions: {embedding_dimension}\")\n\n        # Step\
+          \ 3: Download Markdown files from Minio\n        print(f\"\\n{'=' * 70}\"\
+          )\n        print(\"STEP 3: DOWNLOAD MARKDOWN FILES\")\n        print(\"\
+          =\" * 70)\n\n        if not minio_client.bucket_exists(markdown_bucket):\n\
+          \            raise ValueError(f\"Markdown bucket '{markdown_bucket}' does\
+          \ not exist!\")\n\n        objects = minio_client.list_objects(markdown_bucket,\
+          \ prefix=markdown_prefix, recursive=True)\n        markdown_files = []\n\
+          \n        for obj in objects:\n            if not obj.object_name.lower().endswith('.md'):\n\
+          \                continue\n\n            file_name = os.path.basename(obj.object_name)\n\
+          \            local_path = os.path.join(markdown_dir, file_name)\n\n    \
+          \        print(f\"\\nDownloading: {obj.object_name}\")\n            print(f\"\
+          \  Size: {obj.size} bytes\")\n\n            minio_client.fget_object(markdown_bucket,\
+          \ obj.object_name, local_path)\n            markdown_files.append({\n  \
+          \              'path': local_path,\n                'name': file_name,\n\
+          \                'object_name': obj.object_name\n            })\n      \
+          \      print(f\"  [OK] Downloaded\")\n\n        if len(markdown_files) ==\
+          \ 0:\n            print(\"\\n[WARNING] No markdown files found!\")\n   \
+          \         return\n\n        print(f\"\\n[OK] Downloaded {len(markdown_files)}\
+          \ markdown files\")\n\n        # Step 4: Generate embeddings and store in\
+          \ Milvus\n        print(f\"\\n{'=' * 70}\")\n        print(\"STEP 4: GENERATE\
+          \ EMBEDDINGS AND STORE\")\n        print(\"=\" * 70)\n\n        successful\
+          \ = 0\n        failed = 0\n\n        for idx, md_file in enumerate(markdown_files,\
+          \ 1):\n            print(f\"\\n[{idx}/{len(markdown_files)}] Processing:\
+          \ {md_file['name']}\")\n\n            try:\n                # Read markdown\
+          \ content\n                with open(md_file['path'], 'r', encoding='utf-8')\
+          \ as f:\n                    content = f.read()\n\n                if len(content)\
+          \ == 0:\n                    print(f\"  [SKIP] Empty file\")\n         \
+          \           failed += 1\n                    continue\n\n              \
+          \  print(f\"  Content: {len(content)} characters\")\n\n                #\
+          \ Create Document object\n                document = Document(\n       \
+          \             document_id=md_file['name'],\n                    content=content,\n\
+          \                    mime_type=\"text/markdown\",\n                    metadata={\n\
+          \                        \"source\": md_file['object_name'],\n         \
+          \               \"bucket\": markdown_bucket,\n                        \"\
+          filename\": md_file['name']\n                    }\n                )\n\n\
+          \                # Generate embeddings and insert into Milvus via LlamaStack\n\
+          \                print(f\"  Generating embeddings...\")\n              \
+          \  llama_client.tool_runtime.rag_tool.insert(\n                    documents=[document],\n\
+          \                    vector_db_id=actual_vector_db_id,\n               \
+          \     chunk_size_in_tokens=chunk_size\n                )\n\n           \
+          \     print(f\"  [OK] Successfully embedded and stored\")\n            \
+          \    successful += 1\n\n            except Exception as e:\n           \
+          \     print(f\"  [ERROR] {str(e)}\", file=sys.stderr)\n                failed\
+          \ += 1\n                continue\n\n        print(f\"\\n{'=' * 70}\")\n\
+          \        print(\"SUMMARY\")\n        print(\"=\" * 70)\n        print(f\"\
+          Markdown files processed: {len(markdown_files)}\")\n        print(f\"Successfully\
+          \ embedded: {successful}\")\n        print(f\"Failed: {failed}\")\n    \
+          \    print(f\"Vector DB: {actual_vector_db_id}\")\n        print(f\"Embedding\
+          \ model: {embedding_model_id}\")\n        print(f\"Chunk size: {chunk_size}\
+          \ tokens\")\n        print(\"=\" * 70)\n\n    except Exception as e:\n \
+          \       print(f\"\\n[FATAL ERROR] {str(e)}\", file=sys.stderr)\n       \
+          \ import traceback\n        traceback.print_exc(file=sys.stderr)\n     \
+          \   raise\n\n"
+        image: quay.io/rsriniva/kfp-docling:latest
+pipelineInfo:
+  description: 'Unified pipeline: PDF -> Markdown -> Embeddings -> Milvus (stateless,
+    Minio-coordinated)'
+  name: document-ingestion-pipeline
+root:
+  dag:
+    tasks:
+      convert-pdfs-to-markdown:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-convert-pdfs-to-markdown
+        inputs:
+          parameters:
+            run_id:
+              componentInputParameter: run_id
+        taskInfo:
+          name: convert-pdfs-to-markdown
+      generate-embeddings-and-store:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-generate-embeddings-and-store
+        dependentTasks:
+        - convert-pdfs-to-markdown
+        inputs:
+          parameters:
+            run_id:
+              componentInputParameter: run_id
+        taskInfo:
+          name: generate-embeddings-and-store
+  inputDefinitions:
+    parameters:
+      minio_secret_name:
+        defaultValue: minio-secret
+        description: Kubernetes secret containing Minio credentials
+        isOptional: true
+        parameterType: STRING
+      pipeline_configmap_name:
+        defaultValue: pipeline-config
+        description: Kubernetes ConfigMap with pipeline configuration
+        isOptional: true
+        parameterType: STRING
+      run_id:
+        defaultValue: v1
+        description: Version identifier to force fresh execution (bypasses cache)
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.14.6
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-convert-pdfs-to-markdown:
+          configMapAsEnv:
+          - configMapNameParameter:
+              componentInputParameter: pipeline_configmap_name
+            keyToEnv:
+            - configMapKey: minio_endpoint
+              envVar: MINIO_ENDPOINT
+            - configMapKey: minio_secure
+              envVar: MINIO_SECURE
+            - configMapKey: input_docs_bucket
+              envVar: INPUT_DOCS_BUCKET
+            - configMapKey: markdown_docs_bucket
+              envVar: MARKDOWN_DOCS_BUCKET
+            - configMapKey: markdown_docs_prefix
+              envVar: MARKDOWN_DOCS_PREFIX
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: MINIO_ACCESS_KEY
+              secretKey: minio_root_user
+            - envVar: MINIO_SECRET_KEY
+              secretKey: minio_root_password
+            secretNameParameter:
+              componentInputParameter: minio_secret_name
+        exec-generate-embeddings-and-store:
+          configMapAsEnv:
+          - configMapNameParameter:
+              componentInputParameter: pipeline_configmap_name
+            keyToEnv:
+            - configMapKey: minio_endpoint
+              envVar: MINIO_ENDPOINT
+            - configMapKey: minio_secure
+              envVar: MINIO_SECURE
+            - configMapKey: markdown_docs_bucket
+              envVar: MARKDOWN_DOCS_BUCKET
+            - configMapKey: markdown_docs_prefix
+              envVar: MARKDOWN_DOCS_PREFIX
+            - configMapKey: llamastack_url
+              envVar: LLAMASTACK_URL
+            - configMapKey: vector_db_id
+              envVar: VECTOR_DB_ID
+            - configMapKey: chunk_size_in_tokens
+              envVar: CHUNK_SIZE_IN_TOKENS
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: MINIO_ACCESS_KEY
+              secretKey: minio_root_user
+            - envVar: MINIO_SECRET_KEY
+              secretKey: minio_root_password
+            secretNameParameter:
+              componentInputParameter: minio_secret_name
