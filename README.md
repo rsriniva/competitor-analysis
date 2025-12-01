@@ -149,6 +149,10 @@ oc get routes -n openshift-console
 # Example: apps.cluster-x5jfr.x5jfr.sandbox2053.opentlc.com
 ```
 
+### Register and get an API key for Tavily search
+
+We will use the Tavily search service to do a websearch from a Llamastack Agent. Register and create an API key for Tavily at https://app.tavily.com/home. Once you have the API key, store it in a safe place. You will need this key in the next step.
+
 ### Install the Helm Chart
 
 ```bash
